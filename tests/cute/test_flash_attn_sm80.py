@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from flash_attn.cute import flash_attn_func, flash_attn_varlen_func
+from flash_attn.cute.interface import _get_fwd_config
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available() or torch.cuda.get_device_capability() != (8, 0),
@@ -19,6 +20,32 @@ DTYPES = [
 MODES = ["mha", "gqa", "mqa"]
 LAYOUTS = ["dense", "varlen"]
 HEAD_DIMS = [64, 128]
+
+
+@pytest.mark.parametrize(
+    ("head_dim", "expected_tile_m"),
+    [(128, 128), (192, 64), (256, 64)],
+)
+def test_sm80_forward_tile_avoids_large_head_spills(head_dim, expected_tile_m):
+    config = _get_fwd_config(
+        arch=80,
+        head_dim=head_dim,
+        head_dim_v=head_dim,
+        max_seqlen_q=480,
+        max_seqlen_k=480,
+        num_head_kv=2,
+        qhead_per_kvhead=4,
+        pack_gqa=True,
+        batch_size=8,
+        causal=True,
+        local=False,
+        window_size_left=None,
+        window_size_right=None,
+        num_splits=1,
+        device=torch.device("cuda"),
+    )
+    assert config.m_block_size == expected_tile_m
+    assert config.n_block_size == 64
 
 
 def causal_mask_mod(batch_idx, head_idx, q_idx, kv_idx, seqlen_info, aux_tensors):
@@ -214,7 +241,7 @@ def _check_case(dtype, mode, layout, head_dim, mask_kind, lengths=None):
         + (0 if dtype == torch.float16 else 100)
         + MODES.index(mode) * 10
         + LAYOUTS.index(layout) * 3
-        + HEAD_DIMS.index(head_dim)
+        + (HEAD_DIMS.index(head_dim) if head_dim in HEAD_DIMS else head_dim)
     )
     inputs, dout, q_lengths, k_lengths = _make_inputs(
         dtype, mode, layout, head_dim, seed, lengths
@@ -303,4 +330,17 @@ def test_sm80_dense_even_tiles(head_dim, mask_kind):
         head_dim,
         mask_kind,
         lengths=((256, 256), (256, 256)),
+    )
+
+
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_sm80_hd256_forward_backward_smoke(layout):
+    lengths = ((96, 96), (96, 96)) if layout == "dense" else ((96, 80), (96, 80))
+    _check_case(
+        torch.bfloat16,
+        "gqa",
+        layout,
+        256,
+        "causal",
+        lengths=lengths,
     )

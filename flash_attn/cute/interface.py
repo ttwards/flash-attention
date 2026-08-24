@@ -329,7 +329,11 @@ def _get_fwd_config(
             if head_dim > 64:
                 cfg = FwdConfig(128, 64, True, True)
         elif arch // 10 == 8:
-            cfg = FwdConfig(128, 64, True, True)  # SM80, should tune
+            # M128 at D>128 exhausts the SM80 register file. The additional
+            # dynamic state in varlen then triggers catastrophic local-memory
+            # spilling, while M64 keeps both dense and varlen spill-free.
+            tile_m = 64 if max(head_dim, head_dim_v) > 128 else 128
+            cfg = FwdConfig(tile_m, 64, True, True)
         elif arch // 10 == 9:
             sparse_q = get_sparse_q_block_size(block_sparse_tensors, seqlen_q)
             cfg = _tile_size_fwd_sm90(
