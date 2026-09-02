@@ -1924,8 +1924,18 @@ def _flash_attn_bwd(
             num_threads = 256
         else:
             AtomLayoutMSdP = 2
-            AtomLayoutNdKV = 4 if n_block_size == 128 else 2
-            AtomLayoutMdQ = 2
+            head_dim_padded = (head_dim + 31) // 32 * 32
+            head_dim_v_padded = (head_dim_v + 31) // 32 * 32
+            # The (2, 4) warp layout has a 64-column N tile, which cannot
+            # partition padded head dimensions such as 96, 160, or 224.
+            # Use (4, 2) in those cases so the N tile is 32 columns.  The
+            # 64-row dQ/dKV tiles remain exactly covered along M.
+            AtomLayoutNdKV = 4 if (
+                n_block_size == 128
+                or head_dim_padded % 64
+                or head_dim_v_padded % 64
+            ) else 2
+            AtomLayoutMdQ = 4 if head_dim_padded % 64 else 2
             num_threads = 256
         V_in_regs = False
         dQ_single_wg = False

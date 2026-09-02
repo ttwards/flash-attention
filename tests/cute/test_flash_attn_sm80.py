@@ -344,3 +344,17 @@ def test_sm80_hd256_forward_backward_smoke(layout):
         "causal",
         lengths=lengths,
     )
+
+
+@pytest.mark.parametrize("head_dim", [72, 144, 200])
+@pytest.mark.parametrize("layout", LAYOUTS)
+def test_sm80_padded_head_dim_not_divisible_by_64(head_dim, layout):
+    lengths = ((256, 256), (256, 256)) if layout == "dense" else ((96, 80), (96, 80))
+    _check_case(
+        torch.bfloat16,
+        "mha",
+        layout,
+        head_dim,
+        "none",
+        lengths=lengths,
+    )
